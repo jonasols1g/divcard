@@ -2,12 +2,16 @@ import { useMemo, useState } from 'react'
 import { useLeagues } from '../hooks/useLeagues'
 import { useCardRows } from '../hooks/useCardRows'
 import { LeagueSelector } from './LeagueSelector'
+import { HoverPreview } from './HoverPreview'
 import type { CardRow, Ladder } from '../types'
 
 type SortKey = 'roiPercent' | 'profitChaos' | 'name' | 'setCost' | 'cardChaosValue'
 
 const TRADE_SEARCH_URL = (cardName: string) =>
   `https://www.pathofexile.com/trade/search?q=${encodeURIComponent(cardName)}`
+
+const CARD_ART_URL = (slug: string) =>
+  `https://www.poe-vault.com/images/divination-cards/images/jpg/${slug}.jpg`
 
 export function CardTable() {
   const { leagues, loading: leaguesLoading, error: leaguesError } = useLeagues()
@@ -118,13 +122,25 @@ function Row({ row }: { row: CardRow }) {
 
   return (
     <tr className="hover:bg-neutral-900/50">
-      <td className="px-3 py-2 font-medium text-neutral-100">{row.name}</td>
+      <td className="px-3 py-2 font-medium text-neutral-100">
+        <HoverPreview title={row.name} imageUrl={CARD_ART_URL(row.slug)} flavourText={row.flavourText}>
+          {row.name}
+        </HoverPreview>
+      </td>
       <td className="px-3 py-2 text-neutral-400">{row.stackSize}</td>
       <td className="px-3 py-2 text-neutral-400">
         {price ? `${price.cardChaosValue.toFixed(2)} c` : '–'}
       </td>
       <td className="px-3 py-2 text-neutral-400">
-        {row.rewardItemName}
+        <HoverPreview
+          title={row.rewardItemName}
+          imageUrl={price?.rewardIcon}
+          flavourText={price?.rewardFlavourText}
+          implicitMods={price?.rewardImplicitMods}
+          explicitMods={price?.rewardExplicitMods}
+        >
+          {row.rewardItemName}
+        </HoverPreview>
         {!isFixed && (
           <span className="ml-2 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-yellow-500">
             {row.rewardValueType === 'variable' ? 'variable' : 'unknown'}

@@ -43,6 +43,10 @@ export interface PriceSnapshot {
   profitChaos: number
   roiPercent: number
   capturedAt: string
+  rewardIcon?: string
+  rewardFlavourText?: string
+  rewardExplicitMods?: string[]
+  rewardImplicitMods?: string[]
 }
 
 export interface CardRow extends DivinationCard {

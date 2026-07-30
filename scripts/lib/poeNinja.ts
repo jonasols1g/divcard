@@ -48,9 +48,17 @@ interface ExchangeLine {
   primaryValue: number
 }
 
+interface ExchangeItemMeta {
+  id: string
+  name: string
+  /** relativ sti - prefiks med https://web.poecdn.com */
+  image?: string
+}
+
 interface ExchangeOverviewResponse {
   core: { rates: { divine: number } }
   lines: ExchangeLine[]
+  items: ExchangeItemMeta[]
 }
 
 export interface ExchangeOverview {
@@ -58,6 +66,8 @@ export interface ExchangeOverview {
   divineRate: number
   /** id (slug) -> pris i chaos */
   byId: Map<string, number>
+  /** id (slug) -> ikon-URL (kun tilgjengelig for enkelte kategorier, f.eks. Currency) */
+  iconById: Map<string, string>
 }
 
 export const EXCHANGE_TYPES = [
@@ -83,7 +93,16 @@ export async function fetchExchangeOverview(
   for (const line of data.lines) {
     byId.set(line.id, line.primaryValue)
   }
-  return { divineRate: data.core.rates.divine, byId }
+  const iconById = new Map<string, string>()
+  for (const item of data.items) {
+    if (item.image) iconById.set(item.id, `https://web.poecdn.com${item.image}`)
+  }
+  return { divineRate: data.core.rates.divine, byId, iconById }
+}
+
+interface RawModifier {
+  text: string
+  optional: boolean
 }
 
 export interface StashLine {
@@ -96,6 +115,10 @@ export interface StashLine {
   /** kun satt for skill gems */
   gemLevel?: number
   listingCount: number
+  icon?: string
+  flavourText?: string
+  explicitModifiers?: RawModifier[]
+  implicitModifiers?: RawModifier[]
 }
 
 interface StashOverviewResponse {

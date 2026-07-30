@@ -14,6 +14,7 @@ import { slugify } from './lib/poeNinja'
 import type { DivinationCard } from '../src/types'
 
 const POEDB_URL = 'https://poedb.tw/us/Divination_Cards'
+const MIKIFRIKI_URL = 'https://raw.githubusercontent.com/mikifriki/Divination-Cards/master/db.json'
 const USER_AGENT = 'divcard/1.0 (personlig verktøy; kontakt: jonasolseng@gmail.com)'
 
 const REWARD_CLASSES = [
@@ -185,11 +186,24 @@ function parseReward(parsed: ParsedCard, allCardNames: Set<string>): RewardField
   return { rewardItemName: rewardText || 'Ukjent', rewardQuantity: 1, rewardValueType: 'unknown' }
 }
 
+async function fetchFlavourTextByName(): Promise<Map<string, string>> {
+  const res = await fetch(MIKIFRIKI_URL, { headers: { 'User-Agent': USER_AGENT } })
+  if (!res.ok) {
+    console.warn(`Klarte ikke å hente flavourtekst fra mikifriki (${res.status}) - hopper over.`)
+    return new Map()
+  }
+  const data = (await res.json()) as { Cards: Array<{ name: string; flavour: string }> }
+  return new Map(data.Cards.map((c) => [c.name, c.flavour]))
+}
+
 async function main() {
   console.log(`Henter ${POEDB_URL} ...`)
   const res = await fetch(POEDB_URL, { headers: { 'User-Agent': USER_AGENT } })
   if (!res.ok) throw new Error(`poedb.tw svarte ${res.status}`)
   const html = await res.text()
+
+  console.log(`Henter flavourtekst fra mikifriki-datasettet ...`)
+  const flavourByName = await fetchFlavourTextByName()
 
   const parsed = parsePoedbCards(html)
   console.log(`Fant ${parsed.length} kort-oppføringer på poedb.`)
@@ -208,6 +222,7 @@ async function main() {
       name: p.name,
       stackSize: p.stackSize ?? -1,
       wikiUrl: `https://poedb.tw/us/${p.href}`,
+      flavourText: flavourByName.get(p.name),
       ...reward,
       // manglende stackSize kan ikke prises uansett - overstyr til 'unknown'
       rewardValueType: p.stackSize === null ? 'unknown' : reward.rewardValueType,

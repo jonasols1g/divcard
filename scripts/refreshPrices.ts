@@ -21,6 +21,7 @@ import type { DivinationCard, Ladder } from '../src/types'
 
 async function buildExchangeMap(league: string) {
   const merged = new Map<string, number>()
+  const iconById = new Map<string, string>()
   let divineRate = 0
   for (const type of EXCHANGE_TYPES) {
     const overview = await fetchExchangeOverview(league, type)
@@ -28,8 +29,11 @@ async function buildExchangeMap(league: string) {
     for (const [id, chaosValue] of overview.byId) {
       merged.set(id, chaosValue)
     }
+    for (const [id, icon] of overview.iconById) {
+      iconById.set(id, icon)
+    }
   }
-  return { merged, divineRate }
+  return { merged, iconById, divineRate }
 }
 
 async function buildStashMap(league: string) {
@@ -74,12 +78,21 @@ function pickVariant(card: DivinationCard, candidates: StashLine[]): StashLine |
   return pool.reduce((best, line) => (line.listingCount > best.listingCount ? line : best))
 }
 
-function resolveRewardChaosValue(
+interface ResolvedReward {
+  chaosValue: number
+  icon?: string
+  flavourText?: string
+  explicitMods?: string[]
+  implicitMods?: string[]
+}
+
+function resolveReward(
   card: DivinationCard,
   cardsById: Map<string, number>,
   stashByName: Map<string, StashLine[]>,
   exchangeById: Map<string, number>,
-): number | undefined {
+  exchangeIconById: Map<string, string>,
+): ResolvedReward | undefined {
   const nameLower = card.rewardItemName.toLowerCase()
 
   // poedb forkorter noen gem-navn (f.eks. "Enhance" for "Enhance Support") -
@@ -90,17 +103,28 @@ function resolveRewardChaosValue(
     const stashCandidates = stashByName.get(candidate)
     if (stashCandidates) {
       const variant = pickVariant(card, stashCandidates)
-      if (variant) return variant.chaosValue
+      if (variant) {
+        return {
+          chaosValue: variant.chaosValue,
+          icon: variant.icon,
+          flavourText: variant.flavourText,
+          explicitMods: variant.explicitModifiers?.map((m) => m.text),
+          implicitMods: variant.implicitModifiers?.map((m) => m.text),
+        }
+      }
     }
   }
 
   // belønningen kan være et annet divination card (f.eks. "The Nurse" -> "The Doctor")
   const cardHit = cardsById.get(slugify(card.rewardItemName))
-  if (cardHit !== undefined) return cardHit
+  if (cardHit !== undefined) return { chaosValue: cardHit }
 
   const aliasId = CLASSIC_CURRENCY_ALIASES[nameLower]
-  const exchangeHit = exchangeById.get(aliasId ?? slugify(card.rewardItemName))
-  if (exchangeHit !== undefined) return exchangeHit
+  const exchangeSlug = aliasId ?? slugify(card.rewardItemName)
+  const exchangeHit = exchangeById.get(exchangeSlug)
+  if (exchangeHit !== undefined) {
+    return { chaosValue: exchangeHit, icon: exchangeIconById.get(exchangeSlug) }
+  }
 
   return undefined
 }
@@ -109,7 +133,7 @@ async function refreshLeague(leagueName: string, ladder: Ladder, allCards: Divin
   console.log(`[${ladder}] ${leagueName}: henter priser...`)
 
   const cardOverview = await fetchExchangeOverview(leagueName, 'DivinationCard')
-  const { merged: exchangeById, divineRate } = await buildExchangeMap(leagueName)
+  const { merged: exchangeById, iconById: exchangeIconById, divineRate } = await buildExchangeMap(leagueName)
   const stashByName = await buildStashMap(leagueName)
   const rate = divineRate || cardOverview.divineRate
 
@@ -123,19 +147,15 @@ async function refreshLeague(leagueName: string, ladder: Ladder, allCards: Divin
     if (cardChaosValue === undefined) continue
     if (card.rewardValueType !== 'fixed') continue
 
-    const rewardChaosValue = resolveRewardChaosValue(
-      card,
-      cardOverview.byId,
-      stashByName,
-      exchangeById,
-    )
-    if (rewardChaosValue === undefined) continue
+    const reward = resolveReward(card, cardOverview.byId, stashByName, exchangeById, exchangeIconById)
+    if (reward === undefined) continue
+    const rewardChaosValue = reward.chaosValue
 
     const setCost = cardChaosValue * card.stackSize
     const profitChaos = card.rewardQuantity * rewardChaosValue - setCost
     const roiPercent = setCost > 0 ? (profitChaos / setCost) * 100 : 0
 
-    const priceDoc = {
+    const priceDoc: Record<string, unknown> = {
       league: leagueName,
       ladder,
       cardId: card.id,
@@ -148,6 +168,10 @@ async function refreshLeague(leagueName: string, ladder: Ladder, allCards: Divin
       roiPercent,
       capturedAt: new Date().toISOString(),
     }
+    if (reward.icon) priceDoc.rewardIcon = reward.icon
+    if (reward.flavourText) priceDoc.rewardFlavourText = reward.flavourText
+    if (reward.explicitMods?.length) priceDoc.rewardExplicitMods = reward.explicitMods
+    if (reward.implicitMods?.length) priceDoc.rewardImplicitMods = reward.implicitMods
 
     batch.set(db.collection('prices').doc(`${leagueName}_${ladder}_${card.id}`), priceDoc)
     freshCardIds.add(card.id)
