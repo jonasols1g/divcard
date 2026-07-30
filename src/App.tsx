@@ -7,9 +7,6 @@ function App() {
         <h1 className="text-2xl font-semibold text-white">
           Divination Card Profit Tracker
         </h1>
-        <p className="text-sm text-neutral-400">
-          Path of Exile 1 &mdash; hvilke divination cards er lønnsomme å kjøpe opp som sett?
-        </p>
       </header>
       <CardTable />
     </div>

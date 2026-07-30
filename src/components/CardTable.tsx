@@ -4,7 +4,7 @@ import { useCardRows } from '../hooks/useCardRows'
 import { LeagueSelector } from './LeagueSelector'
 import type { CardRow, Ladder } from '../types'
 
-type SortKey = 'roiPercent' | 'profitChaos' | 'name' | 'setCost'
+type SortKey = 'roiPercent' | 'profitChaos' | 'name' | 'setCost' | 'cardChaosValue'
 
 const TRADE_SEARCH_URL = (cardName: string) =>
   `https://www.pathofexile.com/trade/search?q=${encodeURIComponent(cardName)}`
@@ -23,8 +23,10 @@ export function CardTable() {
   )
 
   const visibleRows = useMemo(() => {
-    const filtered = rows.filter((row) =>
-      row.name.toLowerCase().includes(search.toLowerCase()),
+    const filtered = rows.filter(
+      (row) =>
+        row.name.toLowerCase().includes(search.toLowerCase()) &&
+        (row.price === undefined || row.price.cardChaosValue >= 5),
     )
 
     return filtered.sort((a, b) => {
@@ -44,25 +46,26 @@ export function CardTable() {
 
       <input
         type="search"
-        placeholder="Søk etter kort…"
+        placeholder="Search cards…"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         className="mb-4 w-full max-w-xs rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-100 placeholder:text-neutral-500 focus:outline-none focus:ring-1 focus:ring-purple-500"
       />
 
-      {error && <p className="mb-4 text-sm text-red-400">Feil: {error}</p>}
-      {loading && <p className="text-sm text-neutral-400">Laster…</p>}
+      {error && <p className="mb-4 text-sm text-red-400">Error: {error}</p>}
+      {loading && <p className="text-sm text-neutral-400">Loading…</p>}
 
       {!loading && !error && (
         <div className="overflow-x-auto rounded-md border border-neutral-800">
           <table className="w-full text-left text-sm">
             <thead className="bg-neutral-900 text-neutral-400">
               <tr>
-                <Th label="Kort" onClick={() => setSortKey('name')} active={sortKey === 'name'} />
+                <Th label="Card" onClick={() => setSortKey('name')} active={sortKey === 'name'} />
                 <th className="px-3 py-2 font-medium">Stack</th>
-                <th className="px-3 py-2 font-medium">Belønning</th>
-                <Th label="Settkost" onClick={() => setSortKey('setCost')} active={sortKey === 'setCost'} />
-                <Th label="Profitt" onClick={() => setSortKey('profitChaos')} active={sortKey === 'profitChaos'} />
+                <Th label="Card Price" onClick={() => setSortKey('cardChaosValue')} active={sortKey === 'cardChaosValue'} />
+                <th className="px-3 py-2 font-medium">Reward</th>
+                <Th label="Set Cost" onClick={() => setSortKey('setCost')} active={sortKey === 'setCost'} />
+                <Th label="Profit" onClick={() => setSortKey('profitChaos')} active={sortKey === 'profitChaos'} />
                 <Th label="ROI %" onClick={() => setSortKey('roiPercent')} active={sortKey === 'roiPercent'} />
                 <th className="px-3 py-2 font-medium">Trade</th>
               </tr>
@@ -73,8 +76,8 @@ export function CardTable() {
               ))}
               {visibleRows.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-3 py-6 text-center text-neutral-500">
-                    Ingen kort funnet.
+                  <td colSpan={8} className="px-3 py-6 text-center text-neutral-500">
+                    No cards found.
                   </td>
                 </tr>
               )}
@@ -90,6 +93,7 @@ function sortValue(row: CardRow, key: SortKey): number {
   if (key === 'roiPercent') return row.price?.roiPercent ?? -Infinity
   if (key === 'profitChaos') return row.price?.profitChaos ?? -Infinity
   if (key === 'setCost') return row.price?.setCost ?? -Infinity
+  if (key === 'cardChaosValue') return row.price?.cardChaosValue ?? -Infinity
   return 0
 }
 
@@ -117,10 +121,13 @@ function Row({ row }: { row: CardRow }) {
       <td className="px-3 py-2 font-medium text-neutral-100">{row.name}</td>
       <td className="px-3 py-2 text-neutral-400">{row.stackSize}</td>
       <td className="px-3 py-2 text-neutral-400">
+        {price ? `${price.cardChaosValue.toFixed(2)} c` : '–'}
+      </td>
+      <td className="px-3 py-2 text-neutral-400">
         {row.rewardItemName}
         {!isFixed && (
           <span className="ml-2 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-yellow-500">
-            {row.rewardValueType === 'variable' ? 'variabel' : 'ukjent'}
+            {row.rewardValueType === 'variable' ? 'variable' : 'unknown'}
           </span>
         )}
       </td>
