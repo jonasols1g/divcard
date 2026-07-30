@@ -26,12 +26,40 @@ const REWARD_CLASSES = [
   'normal',
 ] as const
 
+const LINK_WORDS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+}
+
+/**
+ * Mønstre som betyr at belønningen har et vilkårlig/tilfeldig utfall
+ * (tilfeldige corrupted implicits, tilfeldige map-modifiers, ukjent
+ * influence osv) og derfor IKKE kan prissettes presist som ett fast item.
+ */
+const RANDOM_VARIANT_PATTERN =
+  /implicit|modifiers:\s*\d+|delirium:\s*\d+%|unidentified|influenced item|synthesised|fractured|league-specific|double-influenced|nemesis item/i
+
+/**
+ * Gem-belønninger som kun er en kategori ("Support Gem", "Vaal Gem",
+ * "Transfigured Gem" osv), ikke et navngitt, spesifikt gem - da er det
+ * spillet som velger et tilfeldig gem fra kategorien, ikke ett fast item.
+ */
+const GENERIC_GEM_PATTERN =
+  /^((Support|Spell|Attack|Golem|Aura|Trap|Mine|Totem|Curse|Herald|Movement|Minion|Warcry|Brand|Vaal|Transfigured|Exceptional|Chaos)\s+)*Gems?$/i
+
 interface ParsedCard {
   name: string
   href: string
   stackSize: number | null
   rewardClass: string | null
+  /** kun teksten i selve reward-navn-spannet, f.eks. "Skin of the Loyal" */
   rewardText: string
+  /** all tekst i .explicitMod (navn + evt. lenker/corrupted/gem-nivå/ilvl) */
+  fullText: string
 }
 
 function parsePoedbCards(html: string): ParsedCard[] {
@@ -57,8 +85,9 @@ function parsePoedbCards(html: string): ParsedCard[] {
     const rewardText = rewardSpan.length
       ? rewardSpan.text().trim()
       : explicitModEl.text().trim()
+    const fullText = explicitModEl.text().trim()
 
-    const entry: ParsedCard = { name, href, stackSize, rewardClass, rewardText }
+    const entry: ParsedCard = { name, href, stackSize, rewardClass, rewardText, fullText }
     const existing = byHref.get(href)
     if (!existing) {
       byHref.set(href, entry)
@@ -73,15 +102,54 @@ function parsePoedbCards(html: string): ParsedCard[] {
   return Array.from(byHref.values())
 }
 
-function parseReward(
-  parsed: ParsedCard,
-  allCardNames: Set<string>,
-): Pick<DivinationCard, 'rewardItemName' | 'rewardQuantity' | 'rewardValueType'> {
-  const { rewardClass, rewardText } = parsed
+function parseLinks(fullText: string): number | undefined {
+  const match = fullText.match(/(one|two|three|four|five|six)-linked?\b/i)
+  if (!match) return undefined
+  return LINK_WORDS[match[1].toLowerCase()]
+}
+
+function parseGemLevel(fullText: string): number | undefined {
+  const match = fullText.match(/Level (\d+)/)
+  return match ? parseInt(match[1], 10) : undefined
+}
+
+type RewardFields = Pick<
+  DivinationCard,
+  'rewardItemName' | 'rewardQuantity' | 'rewardValueType' | 'rewardLinks' | 'rewardGemLevel' | 'rewardCorrupted'
+>
+
+function parseReward(parsed: ParsedCard, allCardNames: Set<string>): RewardFields {
+  const { rewardClass, rewardText, fullText } = parsed
+  // Merk: ingen mellomrom mellom sammenslåtte spans i kilde-HTML-en (f.eks.
+  // "EnhanceCorrupted"), så vi kan ikke bruke \b - vanlig substreng holder,
+  // "Corrupted" gjengis alltid med stor forbokstav slik den står i kildeteksten.
+  const corrupted = fullText.includes('Corrupted')
 
   // Generisk/tilfeldig "Map" (uansett rarity-klasse) - ikke en spesifikk unik map.
   if (rewardText === 'Map' || rewardText === 'Divination Card') {
     return { rewardItemName: rewardText, rewardQuantity: 1, rewardValueType: 'variable' }
+  }
+
+  // Tilfeldige corrupted implicits, tilfeldige map-modifiers, influence osv -
+  // verdien varierer for mye til å prissettes som ett fast item.
+  if (RANDOM_VARIANT_PATTERN.test(fullText)) {
+    return { rewardItemName: rewardText, rewardQuantity: 1, rewardValueType: 'variable' }
+  }
+
+  if (rewardClass === 'gemitem') {
+    // "Level N " kan stå foran selve gem-navnet i samme span - fjern det,
+    // poe.ninja sitt `name`-felt for gems inneholder aldri nivå-prefikset.
+    const gemName = rewardText.replace(/^Level \d+ /, '').trim()
+    if (GENERIC_GEM_PATTERN.test(gemName)) {
+      return { rewardItemName: gemName, rewardQuantity: 1, rewardValueType: 'variable' }
+    }
+    return {
+      rewardItemName: gemName,
+      rewardQuantity: 1,
+      rewardValueType: 'fixed',
+      rewardGemLevel: parseGemLevel(fullText),
+      rewardCorrupted: corrupted,
+    }
   }
 
   if (rewardClass === 'currencyitem') {
@@ -93,8 +161,14 @@ function parseReward(
     }
   }
 
-  if (rewardClass === 'uniqueitem' || rewardClass === 'gemitem') {
-    return { rewardItemName: rewardText, rewardQuantity: 1, rewardValueType: 'fixed' }
+  if (rewardClass === 'uniqueitem') {
+    return {
+      rewardItemName: rewardText,
+      rewardQuantity: 1,
+      rewardValueType: 'fixed',
+      rewardLinks: parseLinks(fullText),
+      rewardCorrupted: corrupted,
+    }
   }
 
   if (rewardClass === 'rareitem' || rewardClass === 'whiteitem' || rewardClass === 'magicitem' || rewardClass === 'normal') {
@@ -153,7 +227,9 @@ async function main() {
   for (let i = 0; i < cards.length; i += batchSize) {
     const batch = db.batch()
     for (const card of cards.slice(i, i + batchSize)) {
-      batch.set(db.collection('divination_cards').doc(card.id), card)
+      // Firestore-dokumenter kan ikke ha `undefined`-verdier - fjern dem
+      const clean = Object.fromEntries(Object.entries(card).filter(([, v]) => v !== undefined))
+      batch.set(db.collection('divination_cards').doc(card.id), clean)
     }
     await batch.commit()
     console.log(`  ... ${Math.min(i + batchSize, cards.length)}/${cards.length}`)
@@ -164,7 +240,9 @@ async function main() {
     variable: cards.filter((c) => c.rewardValueType === 'variable').length,
     unknown: cards.filter((c) => c.rewardValueType === 'unknown').length,
   }
-  console.log('Ferdig.', byValueType)
+  const withLinks = cards.filter((c) => c.rewardLinks !== undefined).length
+  const withGemLevel = cards.filter((c) => c.rewardGemLevel !== undefined).length
+  console.log('Ferdig.', byValueType, { withLinks, withGemLevel })
 }
 
 main().catch((err) => {

@@ -86,10 +86,16 @@ export async function fetchExchangeOverview(
   return { divineRate: data.core.rates.divine, byId }
 }
 
-interface StashLine {
+export interface StashLine {
   name: string
   chaosValue: number
-  divineValue: number
+  /** kun satt når item har lenker (våpen/rustning) */
+  links?: number
+  /** kun satt (og true) for corrupted gems - poe.ninja sporer ikke corrupted for vanlige uniques */
+  corrupted?: boolean
+  /** kun satt for skill gems */
+  gemLevel?: number
+  listingCount: number
 }
 
 interface StashOverviewResponse {
@@ -111,21 +117,10 @@ export const STASH_TYPES = [
   'SkillGem',
 ] as const
 
-export async function fetchStashOverview(
-  league: string,
-  type: string,
-): Promise<Map<string, number>> {
+export async function fetchStashOverview(league: string, type: string): Promise<StashLine[]> {
   const url = `https://poe.ninja/poe1/api/economy/stash/current/item/overview?type=${encodeURIComponent(type)}&league=${encodeURIComponent(league)}`
   const data = await fetchJson<StashOverviewResponse>(url)
-  const byName = new Map<string, number>()
-  for (const line of data.lines) {
-    // ved duplikate navn (f.eks. korrupte/uncorrupte varianter) beholdes billigste
-    const existing = byName.get(line.name)
-    if (existing === undefined || line.chaosValue < existing) {
-      byName.set(line.name.toLowerCase(), line.chaosValue)
-    }
-  }
-  return byName
+  return data.lines
 }
 
 /**

@@ -11,6 +11,12 @@ export interface DivinationCard {
   rewardItemName: string
   rewardQuantity: number
   rewardValueType: RewardValueType
+  /** påkrevd antall lenker for at reward-oppslaget skal matche riktig variant (f.eks. 6-link) */
+  rewardLinks?: number
+  /** kun for gemitem: påkrevd gem-nivå (f.eks. 21 for "Level 21 X Gem") */
+  rewardGemLevel?: number
+  /** reward er corrupted (informativt - brukes til pris-matching kun for gems, poe.ninja sporer ikke corrupted for vanlige uniques) */
+  rewardCorrupted?: boolean
   flavourText?: string
   artFilename?: string
   wikiUrl?: string

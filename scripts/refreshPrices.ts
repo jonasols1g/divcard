@@ -15,6 +15,7 @@ import {
   fetchLeagues,
   fetchStashOverview,
   slugify,
+  type StashLine,
 } from './lib/poeNinja'
 import type { DivinationCard, Ladder } from '../src/types'
 
@@ -32,26 +33,66 @@ async function buildExchangeMap(league: string) {
 }
 
 async function buildStashMap(league: string) {
-  const merged = new Map<string, number>()
+  const merged = new Map<string, StashLine[]>()
   for (const type of STASH_TYPES) {
-    const byName = await fetchStashOverview(league, type)
-    for (const [name, chaosValue] of byName) {
-      merged.set(name, chaosValue)
+    const lines = await fetchStashOverview(league, type)
+    for (const line of lines) {
+      const key = line.name.toLowerCase()
+      const existing = merged.get(key)
+      if (existing) existing.push(line)
+      else merged.set(key, [line])
     }
   }
   return merged
 }
 
+/**
+ * Velger riktig prislinje blant flere varianter av samme item-navn (f.eks.
+ * ulike lenke-antall eller gem-nivå/corrupted-kombinasjoner). Krever
+ * eksakt match på lenker/gem-nivå/corrupted når kortet spesifiserer det -
+ * finner den ingen match, returneres undefined i stedet for å gjette
+ * (f.eks. ikke bruk en 6-link-pris for et kort som gir 0-link).
+ */
+function pickVariant(card: DivinationCard, candidates: StashLine[]): StashLine | undefined {
+  let pool = candidates
+
+  if (card.rewardGemLevel !== undefined) {
+    const filtered = pool.filter(
+      (l) => l.gemLevel === card.rewardGemLevel && Boolean(l.corrupted) === Boolean(card.rewardCorrupted),
+    )
+    if (filtered.length === 0) return undefined
+    pool = filtered
+  } else if (card.rewardLinks !== undefined) {
+    const filtered = pool.filter((l) => (l.links ?? 0) === card.rewardLinks)
+    if (filtered.length === 0) return undefined
+    pool = filtered
+  }
+
+  if (pool.length === 1) return pool[0]
+  // Ingen spesifikk variant påkrevd (eller flere matcher fortsatt) - bruk
+  // den mest omsatte som "standard"-prisen.
+  return pool.reduce((best, line) => (line.listingCount > best.listingCount ? line : best))
+}
+
 function resolveRewardChaosValue(
   card: DivinationCard,
   cardsById: Map<string, number>,
-  stashByName: Map<string, number>,
+  stashByName: Map<string, StashLine[]>,
   exchangeById: Map<string, number>,
 ): number | undefined {
   const nameLower = card.rewardItemName.toLowerCase()
 
-  const stashHit = stashByName.get(nameLower)
-  if (stashHit !== undefined) return stashHit
+  // poedb forkorter noen gem-navn (f.eks. "Enhance" for "Enhance Support") -
+  // prøv eksakt navn først, så med " support" lagt til.
+  const nameCandidates = card.rewardGemLevel !== undefined ? [nameLower, `${nameLower} support`] : [nameLower]
+
+  for (const candidate of nameCandidates) {
+    const stashCandidates = stashByName.get(candidate)
+    if (stashCandidates) {
+      const variant = pickVariant(card, stashCandidates)
+      if (variant) return variant.chaosValue
+    }
+  }
 
   // belønningen kan være et annet divination card (f.eks. "The Nurse" -> "The Doctor")
   const cardHit = cardsById.get(slugify(card.rewardItemName))
@@ -75,6 +116,7 @@ async function refreshLeague(leagueName: string, ladder: Ladder, allCards: Divin
   let written = 0
   let batch = db.batch()
   let batchCount = 0
+  const freshCardIds = new Set<string>()
 
   for (const card of allCards) {
     const cardChaosValue = cardOverview.byId.get(card.slug)
@@ -108,6 +150,7 @@ async function refreshLeague(leagueName: string, ladder: Ladder, allCards: Divin
     }
 
     batch.set(db.collection('prices').doc(`${leagueName}_${ladder}_${card.id}`), priceDoc)
+    freshCardIds.add(card.id)
     batchCount++
     written++
 
@@ -118,6 +161,29 @@ async function refreshLeague(leagueName: string, ladder: Ladder, allCards: Divin
     }
   }
   if (batchCount > 0) await batch.commit()
+
+  // Rydd opp gamle prisoppføringer for kort som ikke lenger er 'fixed' eller
+  // ikke fikk et resolvert reward-treff denne runden (f.eks. etter en
+  // reklassifisering i seedCards) - ellers blir utdatert/feil data liggende.
+  const existingPrices = await db
+    .collection('prices')
+    .where('league', '==', leagueName)
+    .where('ladder', '==', ladder)
+    .get()
+  let deleteBatch = db.batch()
+  let deleteCount = 0
+  for (const doc of existingPrices.docs) {
+    const cardId = doc.get('cardId') as string
+    if (freshCardIds.has(cardId)) continue
+    deleteBatch.delete(doc.ref)
+    deleteCount++
+    if (deleteCount % 400 === 0) {
+      await deleteBatch.commit()
+      deleteBatch = db.batch()
+    }
+  }
+  if (deleteCount % 400 !== 0) await deleteBatch.commit()
+  if (deleteCount > 0) console.log(`[${ladder}] ${leagueName}: slettet ${deleteCount} utdaterte prisoppføringer.`)
 
   await db
     .collection('leagues')
