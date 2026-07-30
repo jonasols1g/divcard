@@ -13,21 +13,25 @@
  *
  * Legacy `poe.ninja/api/data/itemoverview`-endepunktet (brukt av eldre
  * community-verktøy/dokumentasjon) er dødt på dagens poe.ninja.
+ *
+ * Merk: poe.ninja sin Cloudflare-beskyttelse blokkerer (403) Node sin
+ * innebygde `fetch` basert på TLS-fingerprint, men slipper gjennom vanlig
+ * `curl`. Vi shell'er derfor ut til `curl` for disse kallene i stedet for
+ * å bruke fetch direkte.
  */
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 
-const USER_AGENT = 'divcard/1.0 (personlig verktøy; kontakt: jonasolseng@gmail.com)'
+const execFileAsync = promisify(execFile)
+const USER_AGENT = 'Mozilla/5.0 (compatible; divcard/1.0; personlig verktoy)'
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': USER_AGENT,
-      Accept: 'application/json',
-    },
-  })
-  if (!res.ok) {
-    throw new Error(`poe.ninja ${res.status} ${res.statusText} for ${url}`)
-  }
-  return res.json() as Promise<T>
+  const { stdout } = await execFileAsync(
+    'curl',
+    ['-s', '-A', USER_AGENT, '-H', 'Accept: application/json', '--fail', url],
+    { maxBuffer: 100 * 1024 * 1024 },
+  )
+  return JSON.parse(stdout) as T
 }
 
 export interface PoeNinjaLeague {
